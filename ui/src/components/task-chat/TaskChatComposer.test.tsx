@@ -234,7 +234,13 @@ function typeText(value: string) {
 
 function pressKey(
   key: string,
-  modifiers: { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean } = {},
+  modifiers: {
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    isComposing?: boolean;
+    keyCode?: number;
+  } = {},
 ) {
   flushSync(() => {
     editable().dispatchEvent(
@@ -841,13 +847,38 @@ describe("TaskChatComposer", () => {
     expect(onAdd).toHaveBeenCalledWith("hello", undefined, undefined, undefined, expect.any(String));
   });
 
-  it("does not submit on plain Enter or Shift+Enter (newline stays with the editor)", async () => {
+  it("submits on plain Enter and leaves Shift+Enter to the editor as a newline", async () => {
     const onAdd = vi.fn().mockResolvedValue(undefined);
     render(<TaskChatComposer onAdd={onAdd} workMode="standard" />);
 
     typeText("line one");
-    pressKey("Enter");
     pressKey("Enter", { shiftKey: true });
+    await flushAsync();
+    expect(onAdd).not.toHaveBeenCalled();
+
+    pressKey("Enter");
+    await flushAsync();
+    expect(onAdd).toHaveBeenCalledWith("line one", undefined, undefined, undefined, expect.any(String));
+  });
+
+  it("does not submit on the Enter that confirms an IME composition", async () => {
+    const onAdd = vi.fn().mockResolvedValue(undefined);
+    render(<TaskChatComposer onAdd={onAdd} workMode="standard" />);
+
+    typeText("ni hao");
+    pressKey("Enter", { isComposing: true });
+    pressKey("Enter", { keyCode: 229 });
+    await flushAsync();
+
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it("keeps plain Enter as a newline on mobile", async () => {
+    const onAdd = vi.fn().mockResolvedValue(undefined);
+    render(<TaskChatComposer onAdd={onAdd} workMode="standard" mobile />);
+
+    typeText("line one");
+    pressKey("Enter");
     await flushAsync();
 
     expect(onAdd).not.toHaveBeenCalled();

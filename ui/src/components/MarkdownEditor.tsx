@@ -96,8 +96,10 @@ interface MarkdownEditorProps {
   mentions?: MentionOption[];
   /** Capability-aware action commands supplied by the owning composer. */
   actionCommands?: SlashCommandOption[];
-  /** Called on Cmd/Ctrl+Enter */
+  /** Called on Cmd/Ctrl+Enter, and on plain Enter when `submitOnEnter` is set */
   onSubmit?: () => void;
+  /** Plain Enter calls `onSubmit`; Shift+Enter inserts a newline. */
+  submitOnEnter?: boolean;
   /** Render the rich editor without allowing edits. */
   readOnly?: boolean;
 }
@@ -584,6 +586,22 @@ export function shouldAcceptAutocompleteKey(
   return trigger === "mention" || (trigger === "skill" && skillEnterArmed);
 }
 
+export function isPlainEnterSubmitKey(event: {
+  key: string;
+  keyCode?: number;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  nativeEvent?: { isComposing?: boolean };
+}): boolean {
+  if (event.key !== "Enter") return false;
+  if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return false;
+  // An IME uses Enter to confirm a composition; Safari reports that keydown
+  // only through keyCode 229, not isComposing.
+  return !event.nativeEvent?.isComposing && event.keyCode !== 229;
+}
+
 export function isSameAutocompleteSession(
   left: Pick<MentionState, "trigger" | "marker" | "query" | "textNode" | "atPos" | "endPos"> | null,
   right: Pick<MentionState, "trigger" | "marker" | "query" | "textNode" | "atPos" | "endPos"> | null,
@@ -716,6 +734,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
   mentions,
   actionCommands = [],
   onSubmit,
+  submitOnEnter = false,
   readOnly = false,
 }: MarkdownEditorProps, forwardedRef) {
   const editorValue = useMemo(() => prepareMarkdownForEditor(value), [value]);
@@ -1343,7 +1362,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
           }}
           onBlur={() => onBlur?.()}
           onKeyDown={(event) => {
-            if (onSubmit && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            if (
+              onSubmit &&
+              event.key === "Enter" &&
+              ((event.metaKey || event.ctrlKey) || (submitOnEnter && isPlainEnterSubmitKey(event)))
+            ) {
               event.preventDefault();
               onSubmit();
             }
@@ -1422,6 +1445,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
               return;
             }
           }
+        }
+
+        if (onSubmit && submitOnEnter && isPlainEnterSubmitKey(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          onSubmit();
         }
       }}
       onDragEnter={(evt) => {
