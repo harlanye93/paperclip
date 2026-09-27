@@ -238,14 +238,14 @@ function TaskChatBubbleContent({
           className={cn(
             "break-words py-2 text-sm",
             isHuman
-              ? "max-w-(--pct-85) rounded-2xl rounded-br-sm bg-(--liveness-blue) px-3.5 text-white"
+              ? "max-w-(--pct-85) rounded-2xl rounded-br-sm bg-(--bubble-human) px-3.5 text-white"
               : "w-full bg-transparent px-1 text-foreground",
           )}
         >
           <MarkdownBody
-            // The human bubble sits on the solid --liveness-blue accent, so the
+            // The human bubble sits on the solid --bubble-human fill, so the
             // prose body text must follow the bubble's `text-white` rather than
-            // the default light-mode prose color (which reads as black on blue).
+            // the default light-mode prose color (which would vanish on the dark fill).
             // `paperclip-markdown-on-accent` flips prose tokens to currentColor
             // (== inherited white) in both themes; dark mode was already correct
             // only because `prose-invert` happened to lighten the text.

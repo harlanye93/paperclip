@@ -81,7 +81,7 @@ describe("TaskChatDescriptionBubble (PAP-375)", () => {
     expect(bubble?.getAttribute("data-author")).toBe("human");
     expect(bubble?.className).toContain("items-end");
     expect(bubble?.querySelector('[data-slot="agent-avatar"]')).toBeNull();
-    const body = bubble?.querySelector(".bg-\\(--liveness-blue\\)");
+    const body = bubble?.querySelector(".bg-\\(--bubble-human\\)");
     expect(body).not.toBeNull();
     expect(body?.textContent).toContain("Ship the widget by");
     // Markdown renders (bold), not raw asterisks.
@@ -97,7 +97,7 @@ describe("TaskChatDescriptionBubble (PAP-375)", () => {
     expect(bubble?.querySelector('[data-slot="agent-avatar"]')).not.toBeNull();
     expect(bubble?.textContent).toContain("CEO");
     expect(bubble?.querySelector(".bg-\\(--bubble-agent\\)")).not.toBeNull();
-    expect(bubble?.querySelector(".bg-\\(--liveness-blue\\)")).toBeNull();
+    expect(bubble?.querySelector(".bg-\\(--bubble-human\\)")).toBeNull();
   });
 
   it("renders the live description — a new value shows without remount", () => {

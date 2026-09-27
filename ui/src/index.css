@@ -335,6 +335,8 @@
      treatment sits directly on the page surface; this token keeps the darker
      card available as an explicit lab alternative. */
   --bubble-agent: oklch(0.97 0 0);
+  /* Human-message bubble fill; its text stays white in both themes. */
+  --bubble-human: oklch(0.145 0 0);
   --bubble-agent-card-padding-inline: 0.875rem;
 
   /* Redesigned thread viewport bound: lets the thread own its scroll (auto-
@@ -376,6 +378,7 @@
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
   --bubble-agent: oklch(0.185 0 0);
+  --bubble-human: oklch(0.439 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
