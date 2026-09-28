@@ -133,9 +133,13 @@ export async function admitExplicitNativeContinuation(input: {
     eq(issueRecoveryActions.companyId, companyId), eq(issueRecoveryActions.sourceIssueId, issueId),
     executionBlockerPredicate(),
   )).for("update");
-  if (!actions.length) return null;
+  const ownerActive = (blocker: Awaited<ReturnType<typeof getExecutionBlocker>>) =>
+    blocker?.cause === "execution_owner_active"
+      ? blocked("execution_owner_active", "Waiting for the previous run to fully stop. Your message is saved and will start automatically.")
+      : null;
+  if (!actions.length) return ownerActive(await getExecutionBlocker(db, companyId, issueId));
   const blocker = await getExecutionBlocker(db, companyId, issueId);
-  if (blocker && blocker.recoveryActionId === null) return null;
+  if (blocker && blocker.recoveryActionId === null) return ownerActive(blocker);
   const [pendingInteraction] = await db.select({ id: issueThreadInteractions.id }).from(issueThreadInteractions).where(and(
     eq(issueThreadInteractions.companyId, companyId), eq(issueThreadInteractions.issueId, issueId),
     eq(issueThreadInteractions.status, "pending"),

@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { environmentLeases, heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, type Db } from "@paperclipai/db";
 import { readProcessStartedAt } from "./hot-restart.js";
@@ -84,14 +85,38 @@ export function conversationRecoveryActionPredicate() {
   );
 }
 
-/** OS liveness probes do not signal or stop the process. Unknown ownership holds. */
-function processMayBeAlive(pid: number): boolean {
+export type ProcessTableReader = () => Promise<string>;
+
+function readProcessTable(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("ps", ["-A", "-o", "pid=,pgid=,stat="], { encoding: "utf8", timeout: 1_500, windowsHide: true },
+      (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+}
+
+/** OS liveness probes do not signal or stop the process. Unknown ownership holds.
+ * A zombie has exited and only waits to be reaped, so it cannot own execution.
+ * macOS reports kill(-pgid, 0) as EPERM when a group holds only zombies, and
+ * kill(pid, 0) succeeds for a zombie PID; the process table resolves both.
+ */
+export async function processMayBeAlive(
+  target: { pid: number } | { processGroupId: number },
+  options: { platform?: NodeJS.Platform; readTable?: ProcessTableReader } = {},
+): Promise<boolean> {
+  const byGroup = "processGroupId" in target;
+  const id = byGroup ? target.processGroupId : target.pid;
   try {
-    process.kill(pid, 0);
-    return true;
+    process.kill(byGroup ? -id : id, 0);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
   }
+  if ((options.platform ?? process.platform) === "win32") return true;
+  const table = await (options.readTable ?? readProcessTable)().catch(() => null);
+  if (table === null) return true;
+  return table.split("\n").some(line => {
+    const [pid, pgid, stat] = line.trim().split(/\s+/);
+    return Number(byGroup ? pgid : pid) === id && typeof stat === "string" && !stat.startsWith("Z");
+  });
 }
 
 /** A terminal conversation row does not prove that its execution authority ended.
@@ -113,14 +138,14 @@ export async function getConversationOwnershipBlocker(db: Db, companyId: string,
       or(isNotNull(heartbeatRuns.processPid), isNotNull(heartbeatRuns.processGroupId), activeLease),
     )).orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id));
   for (const { run, activeLease: leaseHeld } of candidates) {
-    let pidAlive = run.processPid !== null && processMayBeAlive(run.processPid);
+    let pidAlive = run.processPid !== null && await processMayBeAlive({ pid: run.processPid });
     if (pidAlive && run.processStartedAt) {
       // A recycled PID cannot keep an old task blocked. An unreadable identity
       // stays conservative; the original process may still own execution.
       const observed = await readProcessStartedAt(run.processPid!).catch(() => null);
       if (observed && new Date(observed).getTime() !== run.processStartedAt.getTime()) pidAlive = false;
     }
-    const groupAlive = run.processGroupId !== null && processMayBeAlive(-run.processGroupId);
+    const groupAlive = run.processGroupId !== null && await processMayBeAlive({ processGroupId: run.processGroupId });
     if (pidAlive || groupAlive || leaseHeld) {
       return {
         runId: run.id,
