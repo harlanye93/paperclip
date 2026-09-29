@@ -7,6 +7,7 @@ import {
   help,
 } from "../../components/agent-config-primitives";
 import { ChoosePathButton } from "../../components/PathInstructionsModal";
+import { CustomProviderConfigFields } from "../../components/CustomProviderFields";
 
 const inputClass =
   "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
@@ -68,6 +69,14 @@ export function OpenCodeLocalConfigFields({
             ? set!({ dangerouslySkipPermissions: v })
             : mark("adapterConfig", "dangerouslySkipPermissions", v)
         }
+      />
+      <CustomProviderConfigFields
+        configSection="adapter"
+        isCreate={isCreate}
+        config={config}
+        eff={eff}
+        mark={mark}
+        inputClass={inputClass}
       />
     </>
   ));

@@ -13,6 +13,7 @@ import { aiConnectionService } from "./ai-connections.js";
 import { secretService } from "./secrets.js";
 import { decideCodexAuthMerge } from "@paperclipai/adapter-codex-local/server";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
+import { parseCustomProviderConfig } from "@paperclipai/adapter-utils/custom-provider";
 import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
 import { decideGrokAuthMerge } from "@paperclipai/adapter-grok-local/server";
 
@@ -225,6 +226,11 @@ export async function prepareManagedAiRuntime(
         { code: "ai_connection_incompatible" },
       );
   }
+  if (parseCustomProviderConfig(input.config.customProvider))
+    throw unprocessable(
+      "A custom model endpoint is incompatible with this AI connection",
+      { code: "ai_connection_incompatible" },
+    );
   await assertManagedAiProjectAuth(input.config, input.binding.provider);
   const service = aiConnectionService(db);
   let selection = await service.select({

@@ -98,6 +98,53 @@ describe("prepareOpenCodeRuntimeConfig", () => {
     await prepared.cleanup();
   });
 
+  it("builds the custom provider from adapterConfig.customProvider with a server-side key", async () => {
+    const configHome = await makeConfigHome();
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome, CUSTOM_LLM_API_KEY: "sk-custom" },
+      config: {
+        model: "custom/qwen-max",
+        customProvider: { baseUrl: "https://gw.example.com/v1/", apiFormat: "openai" },
+      },
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(runtimeConfig.provider).toEqual({
+      custom: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Custom",
+        options: { baseURL: "https://gw.example.com/v1", apiKey: "sk-custom" },
+        models: { "qwen-max": {} },
+      },
+    });
+    await prepared.cleanup();
+  });
+
+  it("injects the custom provider without an API key and even when permissions are not skipped", async () => {
+    const configHome = await makeConfigHome();
+    const prepared = await prepareOpenCodeRuntimeConfig({
+      env: { XDG_CONFIG_HOME: configHome },
+      config: {
+        dangerouslySkipPermissions: false,
+        model: "custom/llama3",
+        customProvider: { baseUrl: "http://localhost:11434/v1", apiFormat: "openai" },
+      },
+    });
+    cleanupPaths.add(prepared.env.XDG_CONFIG_HOME);
+    const runtimeConfig = JSON.parse(
+      await fs.readFile(path.join(prepared.env.XDG_CONFIG_HOME, "opencode", "opencode.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(runtimeConfig.permission).toBeUndefined();
+    expect(runtimeConfig.provider).toMatchObject({
+      custom: { options: { baseURL: "http://localhost:11434/v1" }, models: { llama3: {} } },
+    });
+    expect((runtimeConfig.provider as { custom: { options: Record<string, unknown> } }).custom.options.apiKey)
+      .toBeUndefined();
+    await prepared.cleanup();
+  });
+
   it("reads PAPERCLIP_OPENCODE_PROVIDERS from process.env when absent from the run env", async () => {
     const configHome = await makeConfigHome({ permission: { read: "allow" } });
     const providers = { bifrost: { npm: "@ai-sdk/openai-compatible", models: { "example/model-a": {} } } };

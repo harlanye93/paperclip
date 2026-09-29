@@ -127,6 +127,20 @@ async function fill(label: string, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
+async function choose(label: string, value: string) {
+  const select = container.querySelector(
+    `select[aria-label="${label}"]`,
+  ) as HTMLSelectElement;
+  expect(select, `Missing select ${label}`).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )!.set!.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+}
 async function render(adapter = "pi_local", runnerProvider = "codex") {
   state.params = new URLSearchParams({
     name: "Atlas",
@@ -493,6 +507,65 @@ describe("New agent setup", () => {
       expect(secrets.create).toHaveBeenCalledTimes(1);
     },
   );
+  it("configures a Pi custom endpoint with the key only as a secret reference", async () => {
+    await render("pi_local");
+    await choose("API key provider", "custom");
+    await fill("Endpoint base URL", "https://gw.example.com/v1/");
+    await choose("API format", "anthropic");
+    await fill("Model ID", "qwen3-coder");
+    await fill("CUSTOM_LLM_API_KEY", "example-custom-secret");
+    await click("Run test");
+    const body = api.testEnvironment.mock.calls[0][2];
+    expect(body.testCredentials).toEqual({ CUSTOM_LLM_API_KEY: "example-custom-secret" });
+    expect(body.aiConnection).toBeUndefined();
+    expect(body.adapterConfig).toEqual(expect.objectContaining({
+      model: "custom/qwen3-coder",
+      customProvider: { baseUrl: "https://gw.example.com/v1", apiFormat: "anthropic" },
+    }));
+    await click("Finish setup");
+    const hired = api.hire.mock.calls[0][1];
+    expect(hired.adapterConfig.env.CUSTOM_LLM_API_KEY).toEqual({
+      type: "secret_ref",
+      secretId: "org-secret-1",
+      version: "latest",
+    });
+    expect(hired.adapterConfig.customProvider).toEqual({
+      baseUrl: "https://gw.example.com/v1",
+      apiFormat: "anthropic",
+    });
+    expect(hired.runtimeConfig.aiConnection).toBeUndefined();
+    expect(JSON.stringify(api.hire.mock.calls)).not.toContain("example-custom-secret");
+  });
+  it("switches OpenCode from the AI connection to a keyless custom endpoint", async () => {
+    await render("opencode_local");
+    await choose("Model access", "custom");
+    expect(container.textContent).not.toContain("Connect another account");
+    await fill("Endpoint base URL", "http://localhost:11434/v1");
+    await fill("Model ID", "llama3");
+    await click("Run test");
+    const body = api.testEnvironment.mock.calls[0][2];
+    expect(body.aiConnection).toBeUndefined();
+    expect(body.testCredentials).toEqual({});
+    expect(body.adapterConfig).toEqual(expect.objectContaining({
+      model: "custom/llama3",
+      customProvider: { baseUrl: "http://localhost:11434/v1", apiFormat: "openai" },
+    }));
+    await click("Finish setup");
+    const hired = api.hire.mock.calls[0][1];
+    expect(hired.adapterType).toBe("opencode_local");
+    expect(hired.runtimeConfig.aiConnection).toBeUndefined();
+    expect(hired.adapterConfig.env?.CUSTOM_LLM_API_KEY).toBeUndefined();
+    expect(secrets.create).not.toHaveBeenCalled();
+  });
+  it("requires a valid base URL and model ID for a custom endpoint", async () => {
+    await render("pi_local");
+    await choose("API key provider", "custom");
+    await fill("Endpoint base URL", "not a url");
+    await fill("Model ID", "qwen3-coder");
+    await click("Run test");
+    expect(api.testEnvironment).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Enter the endpoint base URL");
+  });
   it("connects OpenRouter before testing and hiring OpenCode without copying credentials into the agent", async () => {
     await render("opencode_local");
     const model = "openrouter/anthropic/claude-sonnet-4.6";

@@ -4,6 +4,15 @@ import { AiConnectionField, aiProviderForAdapter } from "../ai-connections/AiCon
 import type { AiConnectionBinding } from "@paperclipai/shared";
 import { DEFAULT_CODEX_LOCAL_MODEL } from "@paperclipai/adapter-codex-local";
 import {
+  CUSTOM_PROVIDER_API_KEY_ENV,
+  CUSTOM_PROVIDER_ID,
+  customProviderModelRef,
+  normalizeCustomProviderBaseUrl,
+  supportsCustomProvider,
+  type CustomProviderApiFormat,
+} from "@paperclipai/adapter-utils";
+import { CustomProviderApiFormatSelect } from "../CustomProviderFields";
+import {
   SETUP_CREDENTIAL_KEYS,
   SETUP_LOGIN_HINTS,
   setupEfforts,
@@ -123,8 +132,14 @@ function Setup({
       : null;
   const multiProvider =
     brandType === "opencode_local" || brandType === "pi_local";
-  const providerKeys = setupProviderKeys(brandType);
+  const customCapable = !isRunner && supportsCustomProvider(adapterType);
+  const providerKeys: Record<string, string> = customCapable
+    ? { ...setupProviderKeys(brandType), [CUSTOM_PROVIDER_ID]: CUSTOM_PROVIDER_API_KEY_ENV }
+    : setupProviderKeys(brandType);
   const chooseProvider = multiProvider || brandType === "hermes_local";
+  // OpenCode picks between a Paperclip AI connection and a custom endpoint
+  // through its own "Model access" control instead of the provider list.
+  const showProviderSelect = chooseProvider && brandType !== "opencode_local";
   const hasCredentialField =
     chooseProvider || Boolean(SETUP_CREDENTIAL_KEYS[adapterType]);
   const showModel = !["cursor_cloud", "hermes_gateway"].includes(adapterType);
@@ -141,6 +156,11 @@ function Setup({
   const [modelOpen, setModelOpen] = useState(false);
   const [environmentOverride, setEnvironmentOverride] = useState("");
   const [provider, setProvider] = useState("openrouter");
+  const usingCustom = customCapable && provider === CUSTOM_PROVIDER_ID;
+  const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [customApiFormat, setCustomApiFormat] =
+    useState<CustomProviderApiFormat>("openai");
+  const [customModelId, setCustomModelId] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [providerBinding, setProviderBinding] = useState<EnvBinding | null>(
     null,
@@ -332,8 +352,9 @@ function Setup({
     const values = {
       ...defaultCreateValues,
       adapterType,
-      model:
-        model || (brandType === "codex_local" ? DEFAULT_CODEX_LOCAL_MODEL : ""),
+      model: usingCustom
+        ? customProviderModelRef(customModelId)
+        : model || (brandType === "codex_local" ? DEFAULT_CODEX_LOCAL_MODEL : ""),
       thinkingEffort: effort,
       dangerouslyBypassSandbox: adapterType === "codex_local",
       envBindings: nextConnection?.env ?? {},
@@ -364,6 +385,11 @@ function Setup({
         ...(branch.trim() ? { repoStartingRef: branch.trim() } : {}),
       });
     if (adapterType === "hermes_gateway") config.apiBaseUrl = gatewayUrl.trim();
+    if (usingCustom)
+      config.customProvider = {
+        baseUrl: normalizeCustomProviderBaseUrl(customBaseUrl) ?? customBaseUrl.trim(),
+        apiFormat: customApiFormat,
+      };
     if (usingKimiApi) {
       // --model overrides Kimi's environment-defined model. Let KIMI_MODEL_NAME win.
       delete config.model;
@@ -381,7 +407,12 @@ function Setup({
     return config;
   }
   function preparedConfig(nextConnection = connection) {
-    if (multiProvider && (!model.trim() || !model.includes("/")))
+    if (usingCustom) {
+      if (!normalizeCustomProviderBaseUrl(customBaseUrl))
+        throw new Error("Enter the endpoint base URL, starting with http:// or https://.");
+      if (!customModelId.trim() || /\s/.test(customModelId.trim()))
+        throw new Error("Enter the model ID served by the endpoint.");
+    } else if (multiProvider && (!model.trim() || !model.includes("/")))
       throw new Error("Choose or enter a model in provider/model format.");
     if (
       adapterType === "cursor_cloud" &&
@@ -811,7 +842,32 @@ function Setup({
                     <fieldset disabled={busy} className="space-y-8">
                       <section className="space-y-5">
                         <h3 className="text-sm font-semibold">Runtime</h3>
-                        {aiProviderForAdapter(brandType) && (
+                        {customCapable && brandType === "opencode_local" && (
+                          <Field label="Model access">
+                            <select
+                              aria-label="Model access"
+                              className={controlClass}
+                              value={usingCustom ? "custom" : "connection"}
+                              onChange={(event) => {
+                                const custom = event.target.value === "custom";
+                                setProvider(custom ? CUSTOM_PROVIDER_ID : "openrouter");
+                                setRuntimeAiBinding(
+                                  custom
+                                    ? undefined
+                                    : { provider: "openrouter", method: "api_key", mode: "responsible_user" },
+                                );
+                                setModel("");
+                                setApiKey("");
+                                setProviderBinding(null);
+                                resetTest();
+                              }}
+                            >
+                              <option value="connection">Paperclip AI connection (OpenRouter)</option>
+                              <option value="custom">Custom endpoint (OpenAI-compatible)</option>
+                            </select>
+                          </Field>
+                        )}
+                        {aiProviderForAdapter(brandType) && !usingCustom && (
                           connection && !aiBinding ? (
                             <div className="space-y-3">
                               <p className="text-sm text-muted-foreground">
@@ -827,10 +883,10 @@ function Setup({
                           )
                         )}
                         {models.error && <p role="alert" className="text-sm text-destructive">Could not load models. Retry or enter a model ID manually.</p>}
-                        {((showModel && !usingKimiApi) ||
+                        {((showModel && !usingKimiApi && !usingCustom) ||
                           efforts.length > 0) && (
                           <div className="grid items-start gap-5 sm:grid-cols-2">
-                            {showModel && !usingKimiApi && (
+                            {showModel && !usingKimiApi && !usingCustom && (
                               <ModelDropdown
                                 models={models.data ?? []}
                                 value={model}
@@ -898,7 +954,7 @@ function Setup({
                         )}
                         {hasCredentialField && !aiBinding && (
                           <div className="grid gap-5 sm:grid-cols-2">
-                            {chooseProvider && (
+                            {showProviderSelect && (
                               <Field label="API key provider">
                                 <select
                                   aria-label="API key provider"
@@ -925,6 +981,7 @@ function Setup({
                                                 xai: "xAI",
                                                 groq: "Groq",
                                                 opencode: "OpenCode",
+                                                [CUSTOM_PROVIDER_ID]: "Custom (OpenAI-compatible)",
                                               }[key] ?? key)}
                                     </option>
                                   ))}
@@ -953,12 +1010,14 @@ function Setup({
                                     placeholder={
                                       selectedBinding
                                         ? "Using saved key"
-                                        : [
-                                              "cursor_cloud",
-                                              "hermes_gateway",
-                                            ].includes(adapterType)
-                                          ? "Required"
-                                          : "Optional if already configured"
+                                        : usingCustom
+                                          ? "Optional for keyless local endpoints"
+                                          : [
+                                                "cursor_cloud",
+                                                "hermes_gateway",
+                                              ].includes(adapterType)
+                                            ? "Required"
+                                            : "Optional if already configured"
                                     }
                                   />
                                   {adapterType === "cursor_cloud" && (
@@ -1007,8 +1066,49 @@ function Setup({
                             <p className="text-xs text-muted-foreground sm:col-span-2">
                               New keys are saved as organization secrets when
                               you finish setup.
-                              {multiProvider && ` Use a ${provider}/model ID.`}
+                              {multiProvider && !usingCustom && ` Use a ${provider}/model ID.`}
                             </p>
+                          </div>
+                        )}
+                        {usingCustom && (
+                          <div className="grid gap-5 sm:grid-cols-2">
+                            <div className="sm:col-span-2">
+                              <Field
+                                label="Endpoint base URL"
+                                hint="OpenAI- or Anthropic-compatible API root, for example a LiteLLM, OneAPI, Ollama, or vLLM server."
+                              >
+                                <Input
+                                  aria-label="Endpoint base URL"
+                                  value={customBaseUrl}
+                                  onChange={(event) => {
+                                    setCustomBaseUrl(event.target.value);
+                                    resetTest();
+                                  }}
+                                  placeholder="https://llm-gateway.example.com/v1"
+                                />
+                              </Field>
+                            </div>
+                            <Field label="API format">
+                              <CustomProviderApiFormatSelect
+                                className={controlClass}
+                                value={customApiFormat}
+                                onChange={(value) => {
+                                  setCustomApiFormat(value);
+                                  resetTest();
+                                }}
+                              />
+                            </Field>
+                            <Field label="Model ID">
+                              <Input
+                                aria-label="Model ID"
+                                value={customModelId}
+                                onChange={(event) => {
+                                  setCustomModelId(event.target.value);
+                                  resetTest();
+                                }}
+                                placeholder="qwen3-coder"
+                              />
+                            </Field>
                           </div>
                         )}
                         {adapterType === "hermes_gateway" && (

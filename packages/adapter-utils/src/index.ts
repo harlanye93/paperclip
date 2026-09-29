@@ -75,6 +75,20 @@ export {
   parseEnvBindings,
   parseEnvVars,
 } from "./env-bindings.js";
+export {
+  CUSTOM_PROVIDER_ADAPTER_TYPES,
+  CUSTOM_PROVIDER_API_FORMATS,
+  CUSTOM_PROVIDER_API_KEY_ENV,
+  CUSTOM_PROVIDER_ID,
+  buildOpenCodeCustomProviderEntry,
+  buildPiCustomProviderEntry,
+  customProviderModelId,
+  customProviderModelRef,
+  normalizeCustomProviderBaseUrl,
+  parseCustomProviderConfig,
+  supportsCustomProvider,
+} from "./custom-provider.js";
+export type { CustomProviderApiFormat, CustomProviderConfig } from "./custom-provider.js";
 export { createRuntimeProgressReporter } from "./runtime-progress.js";
 export type {
   RuntimeProgressSink,

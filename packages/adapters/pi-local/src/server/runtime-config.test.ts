@@ -66,6 +66,81 @@ describe("preparePiRuntimeConfig", () => {
     await expect(fs.access(agentConfigDir)).rejects.toThrow();
   });
 
+  it("registers the configured model on its custom provider", async () => {
+    const providers = {
+      custom: { baseUrl: "http://gw/v1", api: "openai-completions", apiKey: "k", models: [{ id: "old-model" }] },
+    };
+    const prepared = await preparePiRuntimeConfig({
+      env: { PAPERCLIP_PI_PROVIDERS: JSON.stringify(providers) },
+      model: "custom/new-model",
+    });
+    const agentConfigDir = prepared.env.PI_CODING_AGENT_DIR;
+    cleanupPaths.add(agentConfigDir);
+
+    const written = (await readModelsJson(agentConfigDir)) as {
+      providers: { custom: { models: Array<{ id: string }> } };
+    };
+    expect(written.providers.custom.models).toEqual([{ id: "old-model" }, { id: "new-model" }]);
+    expect(prepared.notes.some((n) => n.includes("custom/new-model"))).toBe(true);
+    await prepared.cleanup();
+  });
+
+  it("builds the custom provider from adapterConfig.customProvider", async () => {
+    const withKey = await preparePiRuntimeConfig({
+      env: { CUSTOM_LLM_API_KEY: "sk-custom" },
+      model: "custom/qwen-max",
+      customProvider: { baseUrl: "https://gw.example.com/v1/", apiFormat: "anthropic" },
+    });
+    cleanupPaths.add(withKey.env.PI_CODING_AGENT_DIR);
+    expect(await readModelsJson(withKey.env.PI_CODING_AGENT_DIR)).toEqual({
+      providers: {
+        custom: {
+          baseUrl: "https://gw.example.com/v1",
+          api: "anthropic-messages",
+          apiKey: "sk-custom",
+          models: [{ id: "qwen-max" }],
+        },
+      },
+    });
+    await withKey.cleanup();
+
+    const keyless = await preparePiRuntimeConfig({
+      env: {},
+      model: "custom/llama3",
+      customProvider: { baseUrl: "http://localhost:11434/v1" },
+    });
+    cleanupPaths.add(keyless.env.PI_CODING_AGENT_DIR);
+    const written = (await readModelsJson(keyless.env.PI_CODING_AGENT_DIR)) as {
+      providers: { custom: Record<string, unknown> };
+    };
+    expect(written.providers.custom).toMatchObject({ api: "openai-completions", apiKey: "not-needed" });
+    await keyless.cleanup();
+  });
+
+  it("ignores an invalid customProvider", async () => {
+    const prepared = await preparePiRuntimeConfig({
+      env: {},
+      model: "custom/x",
+      customProvider: { baseUrl: "ftp://nope" },
+    });
+    expect(prepared.agentConfigDir).toBeNull();
+    await prepared.cleanup();
+  });
+
+  it("leaves listed models and unconfigured providers untouched", async () => {
+    const providers = { custom: { baseUrl: "http://gw/v1", api: "openai-completions", models: [{ id: "m1", name: "M1" }] } };
+    for (const model of ["custom/m1", "openrouter/some-model", "no-provider"]) {
+      const prepared = await preparePiRuntimeConfig({
+        env: { PAPERCLIP_PI_PROVIDERS: JSON.stringify(providers) },
+        model,
+      });
+      const agentConfigDir = prepared.env.PI_CODING_AGENT_DIR;
+      cleanupPaths.add(agentConfigDir);
+      expect(await readModelsJson(agentConfigDir)).toEqual({ providers });
+      await prepared.cleanup();
+    }
+  });
+
   it("reads PAPERCLIP_PI_PROVIDERS from process.env when absent from the run env", async () => {
     const providers = { tensorix: { baseUrl: "http://gw/anthropic", api: "anthropic-messages", models: [] } };
     process.env.PAPERCLIP_PI_PROVIDERS = JSON.stringify(providers);

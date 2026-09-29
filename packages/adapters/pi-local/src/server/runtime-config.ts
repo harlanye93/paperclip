@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  CUSTOM_PROVIDER_API_KEY_ENV,
+  CUSTOM_PROVIDER_ID,
+  buildPiCustomProviderEntry,
+  parseCustomProviderConfig,
+} from "@paperclipai/adapter-utils/custom-provider";
 
 type PreparedPiRuntimeConfig = {
   env: Record<string, string>;
@@ -87,6 +93,27 @@ function parseProviderConfig(
   }
 }
 
+// Pi resolves `--provider P --model M` only when M is listed on P, so a model
+// picked after the provider config was written would otherwise be rejected.
+// Mirrors the OpenCode adapter's configured-model registration; never touches
+// providers that are not custom-configured or models already listed.
+function registerConfiguredModel(
+  providers: Record<string, unknown>,
+  model: string | null | undefined,
+): string | null {
+  const trimmed = typeof model === "string" ? model.trim() : "";
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) return null;
+  const providerId = trimmed.slice(0, slash);
+  const modelId = trimmed.slice(slash + 1);
+  const entry = providers[providerId];
+  if (!isPlainObject(entry)) return null;
+  const models = Array.isArray(entry.models) ? entry.models : [];
+  if (models.some((item) => isPlainObject(item) && item.id === modelId)) return null;
+  providers[providerId] = { ...entry, models: [...models, { id: modelId }] };
+  return `Registered configured model ${providerId}/${modelId} in the managed Pi models.json.`;
+}
+
 // Materialize custom Pi providers supplied via PAPERCLIP_PI_PROVIDERS (a JSON
 // object in Pi's models.json "providers" shape) into a managed agent-config dir.
 //
@@ -104,14 +131,29 @@ function parseProviderConfig(
 // a literal apiKey or a server-side-expanded {env:VAR} placeholder). For remote
 // execution targets, execute.ts ships the dir to the sandbox as a runtime asset
 // and repoints PI_CODING_AGENT_DIR at the in-sandbox copy.
+//
+// `customProvider` is the UI-managed endpoint (adapterConfig.customProvider). It
+// becomes the `custom` provider and wins over a same-named env-supplied entry.
 export async function preparePiRuntimeConfig(input: {
   env: Record<string, string>;
+  model?: string | null;
+  customProvider?: unknown;
 }): Promise<PreparedPiRuntimeConfig> {
   const resolveEnv = (name: string): string | undefined => input.env[name] ?? process.env[name];
-  const { providers, warning } = parseProviderConfig(
+  const parsed = parseProviderConfig(
     input.env.PAPERCLIP_PI_PROVIDERS ?? process.env.PAPERCLIP_PI_PROVIDERS,
     resolveEnv,
   );
+  const { warning } = parsed;
+  let providers = parsed.providers;
+  const customProvider = parseCustomProviderConfig(input.customProvider);
+  if (customProvider) {
+    const hasApiKey = Boolean(resolveEnv(CUSTOM_PROVIDER_API_KEY_ENV)?.trim());
+    providers = {
+      ...(providers ?? {}),
+      [CUSTOM_PROVIDER_ID]: expandEnvPlaceholders(buildPiCustomProviderEntry(customProvider, hasApiKey), resolveEnv),
+    };
+  }
   if (!providers) {
     return {
       env: input.env,
@@ -120,6 +162,7 @@ export async function preparePiRuntimeConfig(input: {
       cleanup: async () => {},
     };
   }
+  const registeredModelNote = registerConfiguredModel(providers, input.model);
 
   const agentConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-pi-agent-config-"));
   try {
@@ -142,7 +185,8 @@ export async function preparePiRuntimeConfig(input: {
     },
     notes: [
       ...(warning ? [warning] : []),
-      `Injected ${Object.keys(providers).length} custom Pi provider(s) from PAPERCLIP_PI_PROVIDERS into a managed models.json: ${Object.keys(providers).join(", ")}.`,
+      `Injected ${Object.keys(providers).length} custom Pi provider(s) from ${customProvider ? "the custom endpoint config" : "PAPERCLIP_PI_PROVIDERS"} into a managed models.json: ${Object.keys(providers).join(", ")}.`,
+      ...(registeredModelNote ? [registeredModelNote] : []),
     ],
     agentConfigDir,
     cleanup: async () => {

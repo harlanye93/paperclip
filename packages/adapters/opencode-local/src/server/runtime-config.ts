@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { asBoolean } from "@paperclipai/adapter-utils/server-utils";
+import {
+  CUSTOM_PROVIDER_API_KEY_ENV,
+  CUSTOM_PROVIDER_ID,
+  buildOpenCodeCustomProviderEntry,
+  parseCustomProviderConfig,
+} from "@paperclipai/adapter-utils/custom-provider";
 
 type PreparedOpenCodeRuntimeConfig = {
   env: Record<string, string>;
@@ -108,7 +114,8 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   targetIsRemote?: boolean;
 }): Promise<PreparedOpenCodeRuntimeConfig> {
   const skipPermissions = asBoolean(input.config.dangerouslySkipPermissions, true);
-  if (!skipPermissions) {
+  const customProvider = parseCustomProviderConfig(input.config.customProvider);
+  if (!skipPermissions && !customProvider) {
     return {
       env: input.env,
       notes: [],
@@ -149,9 +156,9 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   }
 
   const existingConfig = await readJsonObject(runtimeConfigPath);
-  const notes = [
-    "Injected runtime OpenCode config with permission=allow for all tools and connections.",
-  ];
+  const notes = skipPermissions
+    ? ["Injected runtime OpenCode config with permission=allow for all tools and connections."]
+    : [];
 
   // Merge gateway/custom provider definitions supplied via PAPERCLIP_OPENCODE_PROVIDERS
   // (a JSON object in OpenCode's `provider` shape). OpenCode resolves a `--model
@@ -161,18 +168,30 @@ export async function prepareOpenCodeRuntimeConfig(input: {
   // custom provider with an explicit models map. We accept it as config (not
   // hard-coded) so the gateway URL, key env, and model list stay declarative.
   const resolveEnv = (name: string): string | undefined => input.env[name] ?? process.env[name];
-  const gatewayProviders = parseProviderConfig(
+  let gatewayProviders = parseProviderConfig(
     input.env.PAPERCLIP_OPENCODE_PROVIDERS ?? process.env.PAPERCLIP_OPENCODE_PROVIDERS,
     resolveEnv,
     notes,
   );
+  // The UI-managed endpoint (adapterConfig.customProvider) becomes the `custom`
+  // provider and wins over a same-named env-supplied entry.
+  if (customProvider) {
+    const hasApiKey = Boolean(resolveEnv(CUSTOM_PROVIDER_API_KEY_ENV)?.trim());
+    gatewayProviders = {
+      ...(gatewayProviders ?? {}),
+      [CUSTOM_PROVIDER_ID]: expandEnvPlaceholders(
+        buildOpenCodeCustomProviderEntry(customProvider, hasApiKey),
+        resolveEnv,
+      ),
+    };
+  }
   const existingProvider = isPlainObject(existingConfig.provider) ? existingConfig.provider : {};
   let nextProvider = gatewayProviders
     ? { ...existingProvider, ...gatewayProviders }
     : existingProvider;
   if (gatewayProviders) {
     notes.push(
-      `Injected ${Object.keys(gatewayProviders).length} custom OpenCode provider(s) from PAPERCLIP_OPENCODE_PROVIDERS: ${Object.keys(gatewayProviders).join(", ")}.`,
+      `Injected ${Object.keys(gatewayProviders).length} custom OpenCode provider(s) from ${customProvider ? "the custom endpoint config" : "PAPERCLIP_OPENCODE_PROVIDERS"}: ${Object.keys(gatewayProviders).join(", ")}.`,
     );
   }
 
@@ -204,7 +223,7 @@ export async function prepareOpenCodeRuntimeConfig(input: {
 
   const nextConfig: Record<string, unknown> = {
     ...existingConfig,
-    permission: "allow",
+    ...(skipPermissions ? { permission: "allow" } : {}),
   };
   if (Object.keys(nextProvider).length > 0) {
     nextConfig.provider = nextProvider;

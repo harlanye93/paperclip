@@ -21,6 +21,7 @@ import {
 } from "@paperclipai/adapter-utils/execution-target";
 import { discoverPiModelsCached } from "./models.js";
 import { parsePiJsonl } from "./parse.js";
+import { preparePiRuntimeConfig } from "./runtime-config.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
@@ -81,6 +82,27 @@ function buildPiModelDiscoveryFailureCheck(message: string): AdapterEnvironmentC
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
+  const config = parseObject(ctx.config);
+  // Remote targets validate models through their own hello probe; the managed
+  // models.json is only materialized for local probes.
+  const prepared = ctx.executionTarget?.kind === "remote"
+    ? null
+    : await preparePiRuntimeConfig({
+        env: normalizeEnv(parseObject(config.env)),
+        model: asString(config.model, ""),
+        customProvider: config.customProvider,
+      });
+  try {
+    return await probeEnvironment(ctx, prepared);
+  } finally {
+    await prepared?.cleanup();
+  }
+}
+
+async function probeEnvironment(
+  ctx: AdapterEnvironmentTestContext,
+  prepared: Awaited<ReturnType<typeof preparePiRuntimeConfig>> | null,
+): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
   const command = asString(config.command, "pi");
@@ -124,6 +146,10 @@ export async function testEnvironment(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
+  }
+  if (prepared?.agentConfigDir) env.PI_CODING_AGENT_DIR = prepared.agentConfigDir;
+  for (const note of prepared?.notes ?? []) {
+    checks.push({ code: "pi_runtime_config", level: "info", message: note });
   }
   const runtimeEnv = normalizeEnv(ensurePathInEnv({ ...process.env, ...env }));
 
